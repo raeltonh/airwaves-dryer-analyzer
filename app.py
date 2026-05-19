@@ -805,8 +805,9 @@ if data_mode == "TXT (SD card)":
                 st.warning(f"Could not parse TXT file: {uf.name}")
 
     with st.expander("Load TXT directly from SD card path", expanded=not bool(uploaded_txt)):
-        st.caption("Use this if the macOS upload window will not enable the Upload button. Example: `/Volumes/NO NAME/05190111.TXT`")
-        txt_path = st.text_input("TXT file path", value=st.session_state.get("txt_path", ""), key="txt_path")
+        st.caption("Use this if the macOS upload window will not enable the Upload button. Examples: `/Volumes/NO NAME/05190111.TXT` or `~/Downloads/05190111.TXT`")
+        default_txt_path = "~/Downloads/05190111.TXT" if Path("~/Downloads/05190111.TXT").expanduser().exists() else ""
+        txt_path = st.text_input("TXT file path", value=st.session_state.get("txt_path", default_txt_path), key="txt_path")
         c_path, c_auto = st.columns(2)
         with c_path:
             load_path = st.button("Load TXT from path", use_container_width=True, key="btn_load_txt_path")
@@ -820,8 +821,11 @@ if data_mode == "TXT (SD card)":
             volumes_dir = Path("/Volumes")
             if volumes_dir.exists():
                 candidate_paths = sorted(volumes_dir.glob("*/*.TXT")) + sorted(volumes_dir.glob("*/*.txt"))
+            downloads_dir = Path("~/Downloads").expanduser()
+            if downloads_dir.exists():
+                candidate_paths += sorted(downloads_dir.glob("*.TXT")) + sorted(downloads_dir.glob("*.txt"))
             if not candidate_paths:
-                st.warning("No TXT files found under /Volumes. Check if the SD card is mounted.")
+                st.warning("No TXT files found under /Volumes or ~/Downloads. Check if the SD card is mounted or copy the TXT to Downloads.")
 
         if candidate_paths:
             st.session_state["txt_direct_paths"] = [str(path) for path in candidate_paths]
