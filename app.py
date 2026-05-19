@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from typing import Dict, Tuple, List, Any
 
 import numpy as np
@@ -779,34 +780,79 @@ def decode_uploaded_text(file_bytes: bytes) -> str:
             continue
     return file_bytes.decode("utf-8", errors="ignore")
 
+def parse_txt_payload(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    return parse_sd_txt(decode_uploaded_text(file_bytes), filename)
+
 if data_mode == "TXT (SD card)":
     st.subheader("Upload TXT files (SD card)")
-    st.caption("Arraste arquivos `.txt` / `.TXT` da Atlas/Apollo ou clique para selecionar. No macOS, o botão Upload só habilita depois de clicar no arquivo.")
+    st.caption("Arraste arquivos `.txt` / `.TXT` da Atlas/Apollo, selecione pelo caminho do SD card ou use a busca automática.")
     uploaded_txt = st.file_uploader(
         "Select one or more TXT files",
-        type=["txt"],
         accept_multiple_files=True,
         key="upload_txt",
-        help="Aceita arquivos TXT de SD card, inclusive Atlas Max Plus.",
+        help="Aceita arquivos TXT de SD card, inclusive Atlas Max Plus. Sem filtro rígido para evitar bloqueio do seletor no macOS.",
     )
+    parsed=[]
     if uploaded_txt:
-        parsed=[]
         for uf in uploaded_txt:
             if not uf.name.lower().endswith(".txt"):
                 st.warning(f"Ignoring unsupported file in TXT mode: {uf.name}")
                 continue
-            text=decode_uploaded_text(uf.getvalue())
-            df=parse_sd_txt(text, uf.name)
+            df=parse_txt_payload(uf.getvalue(), uf.name)
             if not df.empty:
                 parsed.append(df)
             else:
                 st.warning(f"Could not parse TXT file: {uf.name}")
-        if parsed:
-            df_all=pd.concat(parsed, ignore_index=True)
-            _finish_loaded_df(df_all)
-            st.success(f"Imported {len(df_all)} rows from {len(parsed)} file(s).")
-            with st.expander("Preview (first rows)"): st.dataframe(df_all.head(200), use_container_width=True)
-        else: st.info("Could not parse valid data from the uploaded TXT files.")
+
+    with st.expander("Load TXT directly from SD card path", expanded=not bool(uploaded_txt)):
+        st.caption("Use this if the macOS upload window will not enable the Upload button. Example: `/Volumes/NO NAME/05190111.TXT`")
+        txt_path = st.text_input("TXT file path", value=st.session_state.get("txt_path", ""), key="txt_path")
+        c_path, c_auto = st.columns(2)
+        with c_path:
+            load_path = st.button("Load TXT from path", use_container_width=True, key="btn_load_txt_path")
+        with c_auto:
+            auto_load = st.button("Auto-detect TXT on SD card", use_container_width=True, key="btn_auto_txt_sd")
+
+        candidate_paths: List[Path] = []
+        if load_path and txt_path.strip():
+            candidate_paths = [Path(txt_path.strip()).expanduser()]
+        elif auto_load:
+            volumes_dir = Path("/Volumes")
+            if volumes_dir.exists():
+                candidate_paths = sorted(volumes_dir.glob("*/*.TXT")) + sorted(volumes_dir.glob("*/*.txt"))
+            if not candidate_paths:
+                st.warning("No TXT files found under /Volumes. Check if the SD card is mounted.")
+
+        if candidate_paths:
+            st.session_state["txt_direct_paths"] = [str(path) for path in candidate_paths]
+
+        if st.session_state.get("txt_direct_paths"):
+            if st.button("Clear direct TXT selection", use_container_width=True, key="btn_clear_txt_direct"):
+                st.session_state.pop("txt_direct_paths", None)
+                st.rerun()
+
+    for raw_path in st.session_state.get("txt_direct_paths", []):
+        path = Path(raw_path)
+        try:
+            if not path.is_file():
+                st.warning(f"TXT path not found: {path}")
+                continue
+            df=parse_txt_payload(path.read_bytes(), path.name)
+            if not df.empty:
+                parsed.append(df)
+                st.success(f"Loaded TXT from: {path}")
+            else:
+                st.warning(f"Could not parse TXT file: {path}")
+        except Exception as e:
+            st.warning(f"Could not read TXT file {path}: {e}")
+
+    if parsed:
+        df_all=pd.concat(parsed, ignore_index=True)
+        _finish_loaded_df(df_all)
+        st.success(f"Imported {len(df_all)} rows from {len(parsed)} file(s).")
+        with st.expander("Preview (first rows)"): st.dataframe(df_all.head(200), use_container_width=True)
+    else:
+        st.info("Upload a TXT file, enter its SD-card path, or use auto-detect to render the chart.")
 
 elif data_mode == "XML":
     st.subheader("Upload XML or Excel profile")
