@@ -517,6 +517,9 @@ def serialize_session() -> Dict[str, Any]:
         "show_minmax": st.session_state.get("show_minmax", True),
         "min_line": st.session_state.get("min_line", 300.0 if unit_display=="°F" else 150.0),
         "max_line": st.session_state.get("max_line", 320.0 if unit_display=="°F" else 160.0),
+        "heat_zone_start_min": st.session_state.get("heat_zone_start_min", 2.0),
+        "heat_zone_end_min": st.session_state.get("heat_zone_end_min", 8.0),
+        "heat_zone_target_temp": st.session_state.get("heat_zone_target_temp", 115.0 if unit_display=="°C" else 239.0),
     }
 
 def apply_loaded_session(cfg: Dict[str, Any]):
@@ -753,7 +756,7 @@ chips = " ".join(
 st.markdown(chips, unsafe_allow_html=True)
 
 st.markdown("**Process Zones**")
-z1, z2, z3 = st.columns(3)
+z1, z2, z3, z4 = st.columns(4)
 with z1:
     heat_zone_start_min = st.number_input(
         "Heat Zone start (min)",
@@ -775,6 +778,15 @@ with z2:
 with z3:
     heat_zone_duration_min = max(0.0, float(heat_zone_end_min) - float(heat_zone_start_min))
     st.metric("Heat Zone time", f"{heat_zone_duration_min:.2f} min")
+with z4:
+    heat_zone_target_temp = st.number_input(
+        f"Heat Zone target ({unit_display})",
+        min_value=0.0,
+        max_value=700.0,
+        value=float(st.session_state.get("heat_zone_target_temp", 115.0 if unit_display=="°C" else 239.0)),
+        step=1.0,
+        key="heat_zone_target_temp",
+    )
 
 if heat_zone_end_min <= heat_zone_start_min:
     st.warning("Heat Zone end must be greater than Heat Zone start.")
@@ -1130,6 +1142,10 @@ if not heat_df.empty:
             f"Max ({unit_display})": ("y", "max"),
         },
     ).reset_index().round(3)
+    heat_zone_summary[f"Target ({unit_display})"] = round(float(heat_zone_target_temp), 3)
+    heat_zone_summary[f"Mean vs Target ({unit_display})"] = (
+        heat_zone_summary[f"Mean ({unit_display})"] - float(heat_zone_target_temp)
+    ).round(3)
 
 # =========================
 # CHARTS
@@ -1170,6 +1186,22 @@ def draw_process_zones(ax, x_limit: float):
             color="#333333",
         )
 
+def draw_heat_zone_target(ax):
+    hz_start = float(heat_zone_start_min)
+    hz_end = float(heat_zone_end_min)
+    if hz_end <= hz_start:
+        return
+    ax.hlines(
+        y=float(heat_zone_target_temp),
+        xmin=hz_start,
+        xmax=hz_end,
+        colors="#7a1f8a",
+        linestyles="-.",
+        linewidth=2.4,
+        label=f"Heat Zone Target {float(heat_zone_target_temp):.0f}{unit_display.replace('°','')}",
+        zorder=4,
+    )
+
 def process_zone_handles():
     return [
         Patch(facecolor=PROCESS_ZONE_COLORS[name], edgecolor="none", alpha=0.8, label=name)
@@ -1198,6 +1230,8 @@ for b in belt_labels:
     ax.axhline(y=setpoint_display[b], linewidth=1.8, linestyle="--",
                color=st.session_state["belts_cfg"][b]["color"], label=f"{b} SP {setpoint_display[b]:.0f}{unit_display.replace('°','')}")
 
+draw_heat_zone_target(ax)
+
 if show_minmax:
     ax.axhline(y=min_line, color="g", linewidth=2, label="Min")
     ax.axhline(y=max_line, color="r", linewidth=2, label="Max")
@@ -1220,6 +1254,7 @@ ax.set_title(f"Temperature Curves — {machine} (Entry / Heat / Exit Zones)")
 zone_patches = process_zone_handles()
 chan_handles = [Line2D([0],[0], color=channel_colors[ch], lw=2, label=ch) for ch in ["CH1","CH2","CH3"]]
 extra = [Line2D([0],[0], color=st.session_state["belts_cfg"][b]["color"], lw=2, linestyle="--", label=f"{b} SP") for b in belt_labels]
+extra += [Line2D([0],[0], color="#7a1f8a", lw=2.4, linestyle="-.", label="Heat Zone Target")]
 if show_minmax: extra += [Line2D([0],[0], color="g", lw=2, label="Min"), Line2D([0],[0], color="r", lw=2, label="Max")]
 
 leg1 = ax.legend(handles=zone_patches, title="Process Zones", loc="upper left", bbox_to_anchor=(1.01,1.0), borderaxespad=0.)
@@ -1248,7 +1283,11 @@ st.markdown("### Insights (by Belt)")
 st.dataframe(insights, use_container_width=True)
 
 st.markdown("### Heat Zone Summary")
-st.caption(f"Configured Heat Zone: {hz_start:.2f} to {hz_end:.2f} min ({max(0.0, hz_end - hz_start):.2f} min).")
+st.caption(
+    f"Configured Heat Zone: {hz_start:.2f} to {hz_end:.2f} min "
+    f"({max(0.0, hz_end - hz_start):.2f} min). "
+    f"Target: {float(heat_zone_target_temp):.1f}{unit_display}."
+)
 if heat_zone_summary.empty:
     st.info("No samples fall inside the configured Heat Zone.")
 else:
@@ -1278,6 +1317,7 @@ for belt in belt_labels:
     ax_b.axhline(y=sp_disp, linewidth=1.8, linestyle="--",
                  label=f"SP {sp_disp:.0f}{unit_display.replace('°','')}",
                  color=st.session_state["belts_cfg"][belt]["color"])
+    draw_heat_zone_target(ax_b)
 
     apply_time_axis(ax_b, plot_end, st.session_state.get("sel_tick_mode","Auto"), st.session_state.get("sld_max_labels",12))
     ax_b.set_xlim(plot_start, plot_end)
@@ -1287,6 +1327,7 @@ for belt in belt_labels:
 
     extra_belt = [Line2D([0],[0], color=st.session_state["belts_cfg"][belt]["color"], lw=2, linestyle="--",
                          label=f"SP {sp_disp:.0f}{unit_display.replace('°','')}")]
+    extra_belt += [Line2D([0],[0], color="#7a1f8a", lw=2.4, linestyle="-.", label="Heat Zone Target")]
 
     if (series_color_mode or st.session_state.get("toggle_series_legend", False)) and used_series:
         series_handles_belt = [Line2D([0],[0], color=series_colors.get(s, "#666"), lw=2, label=s) for s in sorted(used_series)]
@@ -1320,6 +1361,7 @@ csv_df["channel_color"] = csv_df["channel"].map(channel_colors)
 csv_df["series_color"] = np.where(csv_df.get("series","")!="", csv_df["series"].map(DEFAULT_SERIES_COLORS), None)
 csv_df["side"] = csv_df["side"].astype(str)
 csv_df["zone"] = csv_df[x_col].apply(assign_zone)
+csv_df["heat_zone_target"] = float(heat_zone_target_temp)
 st.download_button("Download CSV (consolidated data)",
                    data=csv_df.to_csv(index=False).encode("utf-8"),
                    file_name="temperature_vs_time.csv", mime="text/csv", key="dl_csv_all")
